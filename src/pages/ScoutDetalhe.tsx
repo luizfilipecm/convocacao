@@ -69,7 +69,7 @@ export default function ScoutDetalhe() {
 
   async function fechar() {
     if (!scout || !player || !finalSkills) return
-    const overall = computeOverall(finalSkills, player.aptitude)
+    const overall = computeOverall(finalSkills, player.aptitude, player.position1, player.position2)
     const forma = Math.min(overall + FORMA_RANGE, Math.max(overall - FORMA_RANGE, player.forma ?? overall))
     await supabase.from('skill_ratings').insert({
       player_id: player.id, source: 'scout', skills: finalSkills, overall, created_by: profile?.id,
@@ -159,7 +159,7 @@ export default function ScoutDetalhe() {
             <div className="card space-y-3 border-l-4 border-emerald-600">
               <h2 className="font-bold">Ajuste final (vira o Overall oficial)</h2>
               <SkillEditor skills={finalSkills} onChange={setFinalSkills} />
-              <p className="text-sm">Overall final: <b>{computeOverall(finalSkills, player.aptitude)}</b></p>
+              <p className="text-sm">Overall final: <b>{computeOverall(finalSkills, player.aptitude, player.position1, player.position2)}</b></p>
               <div className="flex gap-2">
                 <button className="btn-primary" onClick={fechar}>Confirmar e fechar</button>
                 <button className="btn-secondary" onClick={() => setFinalSkills(null)}>Cancelar</button>

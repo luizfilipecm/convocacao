@@ -39,7 +39,7 @@ export default function Jogadores() {
     setBusy(true)
     try {
       const finalSkills = avulso ? defaultSkills(notaAvulso) : skills
-      const overall = computeOverall(finalSkills, aptitude)
+      const overall = computeOverall(finalSkills, aptitude, avulso ? 'goleiro' : pos1, avulso ? 'goleiro' : pos2)
       const { data, error } = await supabase.from('players').insert({
         name, nickname: nickname || null, category,
         position1: avulso ? 'goleiro' : pos1,
@@ -136,7 +136,7 @@ export default function Jogadores() {
               <p className="label">Avaliação inicial simples (o Scout por votação vem depois)</p>
               <SkillEditor skills={skills} onChange={setSkills} />
               <p className="mt-2 text-sm text-zinc-500">
-                Overall calculado: <b>{computeOverall(skills, aptitude)}</b>
+                Overall calculado: <b>{computeOverall(skills, aptitude, pos1, pos2)}</b>
               </p>
             </div>
           )}

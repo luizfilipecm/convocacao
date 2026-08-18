@@ -70,7 +70,7 @@ export default function JogadorDetalhe() {
 
   async function saveNewRating() {
     if (!editSkills || !player) return
-    const overall = computeOverall(editSkills, player.aptitude)
+    const overall = computeOverall(editSkills, player.aptitude, player.position1, player.position2)
     // Forma se mantém, mas re-ancorada no teto/piso do novo Overall
     const forma = Math.min(overall + FORMA_RANGE, Math.max(overall - FORMA_RANGE, player.forma ?? overall))
     await supabase.from('skill_ratings').insert({
@@ -89,9 +89,11 @@ export default function JogadorDetalhe() {
       aptitude: form.aptitude,
     }
     if (isOrganizador) updates.category = form.category
-    if (form.aptitude !== player.aptitude && ratings[0]) {
-      // aptidão mudou → recalcula overall da avaliação vigente (vale só daqui pra frente)
-      updates.overall = computeOverall(ratings[0].skills, form.aptitude)
+    const mudouCalculo = form.aptitude !== player.aptitude
+      || form.position1 !== player.position1 || form.position2 !== player.position2
+    if (mudouCalculo && ratings[0]) {
+      // aptidão/posições mudaram → recalcula overall da avaliação vigente (vale só daqui pra frente)
+      updates.overall = computeOverall(ratings[0].skills, form.aptitude, form.position1, form.position2)
     }
     await supabase.from('players').update(updates).eq('id', player.id)
     setEditData(false)
@@ -215,7 +217,7 @@ export default function JogadorDetalhe() {
                 Isso cria um novo registro datado — o histórico anterior não é alterado e as estatísticas passadas ficam intactas.
               </p>
               <SkillEditor skills={editSkills} onChange={setEditSkills} />
-              <p className="text-sm">Novo Overall: <b>{computeOverall(editSkills, player.aptitude)}</b></p>
+              <p className="text-sm">Novo Overall: <b>{computeOverall(editSkills, player.aptitude, player.position1, player.position2)}</b></p>
               <div className="flex gap-2">
                 <button className="btn-primary" onClick={saveNewRating}>Salvar avaliação</button>
                 <button className="btn-secondary" onClick={() => setEditSkills(null)}>Cancelar</button>

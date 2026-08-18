@@ -14,6 +14,8 @@ sorteio de times equilibrados por **Forma**, cronômetro e registro de partidas 
 2. Vá em **SQL Editor → New query**, cole o conteúdo inteiro de
    [`supabase/schema.sql`](supabase/schema.sql) e clique em **Run**.
    Isso cria todas as tabelas, permissões (RLS) e as funções de votação sem login.
+   *Já tinha rodado uma versão anterior do schema?* Rode só
+   [`supabase/migration-2026-08-17-pausa.sql`](supabase/migration-2026-08-17-pausa.sql).
 3. Em **Project Settings → API**, copie a **Project URL** e a **anon public key**.
 
 > A service role key **não** é usada pelo app — guarde-a em segurança e não a coloque no frontend.
@@ -54,7 +56,7 @@ Todo push na branch `main` gera deploy automático.
 
 | Termo | Significado |
 |---|---|
-| **Overall** | Nota fixa de skills, definida pelo Scout (ajustada pela aptidão ofensiva/defensiva) |
+| **Overall** | Nota fixa de skills, definida pelo Scout — skills-chave da posição pesam mais e a aptidão ofensiva/defensiva desloca os pesos |
 | **Forma** | Nota que reage a resultados (+0.3 vitória, −0.3 derrota, teto/piso de ±2 do Overall). É a que vale no sorteio |
 | **Scout** | Avaliação de habilidades por votação, feita uma vez por jogador |
 | **Voto** | Link de votação de Scout, sem login (`/votar/:token`) |
@@ -64,10 +66,19 @@ Todo push na branch `main` gera deploy automático.
 
 ### Regras implementadas
 
-- **Partida:** até 2 gols ou 10 minutos; pênaltis só no empate da 1ª partida do dia;
-  nas demais, a vantagem do empate é de quem está em quadra.
-- **Sorteio:** sempre 3 times (máx. 18 vagas; excedente vira extra), prioridade:
-  1 por posição em cada time → equilíbrio de Forma média → +1 defensor, depois +1 meia → livre.
+- **Partida:** até 2 gols ou 10 minutos (com botão de pausa); ao bater a meta de gols
+  o sistema *sugere* encerrar num popup (o gol pode ser anulado); pênaltis só no empate
+  da 1ª partida do dia; nas demais, a vantagem do empate é de quem está em quadra.
+  Ao encerrar, a próxima partida já aparece montada (quem ficou × quem estava de fora),
+  com as escalações e dropdown de troca por atleta.
+- **Sorteio:** sempre 3 times de 7 (1 goleiro + 6 na linha, máx. 21 vagas; excedente vira
+  extra), prioridade: 1 por posição em cada time → equilíbrio de Forma média →
+  +1 defensor, depois +1 meia → livre.
+- **Seleção dos atletas do dia:** mensalistas primeiro, depois quem mais participou das
+  últimas 5 peladas, depois ordem alfabética.
+- **Ajustes do organizador:** em partidas encerradas dá pra editar/apagar gols e
+  assistências, adicionar gols e apagar a partida inteira — placar, resultado e Forma
+  são recalculados (e revertidos) automaticamente.
 - **Categorias:** Mensalista (promoção manual), Frequente (automático: convidado com 4+
   presenças nas últimas 10 peladas), Turista, Convidado.
 - **Scout de jogador novo:** avaliação simples no cadastro; na 3ª presença o sistema

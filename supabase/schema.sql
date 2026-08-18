@@ -120,6 +120,8 @@ create table if not exists matches (
   streak_b int not null default 1,
   penaltis boolean not null default false,
   penalti_winner int, -- time que venceu nos pênaltis (só 1ª partida do dia)
+  paused_at timestamptz,               -- cronômetro pausado desde
+  paused_total_seg int not null default 0, -- tempo total pausado acumulado
   status text not null default 'em_andamento'
     check (status in ('em_andamento','encerrada')),
   winner int, -- null = empate

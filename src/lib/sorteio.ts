@@ -7,7 +7,8 @@ export interface SorteioResult {
 }
 
 const LINE_POSITIONS: Position[] = ['defensor', 'meia', 'atacante']
-const MAX_PER_TEAM = 6 // 1 goleiro + 5 linha (18 vagas no total)
+const LINE_PER_TEAM = 6 // 6 na linha
+const MAX_PER_TEAM = 7  // 1 goleiro + 6 linha (21 vagas no total)
 
 const formaOf = (p: Player) => p.forma ?? p.overall ?? 5
 
@@ -73,8 +74,8 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
     warnings.push(`Só ${goleiros.length} goleiro(s) presente(s) — time(s) sem goleiro fixo.`)
   }
 
-  // --- Vagas de linha: distribuir o mais parelho possível (máx. 5 por time) ---
-  const totalLinha = Math.min(linha.length, 15)
+  // --- Vagas de linha: distribuir o mais parelho possível (máx. 6 por time) ---
+  const totalLinha = Math.min(linha.length, LINE_PER_TEAM * 3)
   const sizes = [0, 0, 0]
   for (let i = 0; i < totalLinha; i++) sizes[i % 3]++
 
@@ -136,7 +137,7 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
     }
   }
   if (presentes.length > MAX_PER_TEAM * 3) {
-    warnings.push(`${extras.length} jogador(es) como extra (limite de 18 vagas).`)
+    warnings.push(`${extras.length} jogador(es) como extra (limite de 21 vagas: 3 times de 7).`)
   }
 
   return { teams, extras, warnings }

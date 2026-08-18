@@ -131,6 +131,8 @@ export interface Match {
   streak_b: number
   penaltis: boolean
   penalti_winner: number | null
+  paused_at: string | null
+  paused_total_seg: number
   status: 'em_andamento' | 'encerrada'
   winner: number | null
   fica: number | null
