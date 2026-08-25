@@ -14,9 +14,22 @@ sorteio de times equilibrados por **Forma**, cronômetro e registro de partidas 
 2. Vá em **SQL Editor → New query**, cole o conteúdo inteiro de
    [`supabase/schema.sql`](supabase/schema.sql) e clique em **Run**.
    Isso cria todas as tabelas, permissões (RLS) e as funções de votação sem login.
-   *Já tinha rodado uma versão anterior do schema?* Rode só as migrações novas:
-   [`supabase/migration-2026-08-17-pausa.sql`](supabase/migration-2026-08-17-pausa.sql) e
-   [`supabase/migration-2026-08-25-subs-temporarias.sql`](supabase/migration-2026-08-25-subs-temporarias.sql).
+   *Já tinha rodado uma versão anterior do schema?* As migrações novas são aplicadas
+   **automaticamente em cada deploy da Vercel** se a variável `SUPABASE_DB_URL` estiver
+   configurada (veja abaixo). Sem ela, rode manualmente os arquivos `supabase/migration-*.sql`
+   no SQL Editor.
+
+### Migrações automáticas no deploy (recomendado)
+
+O build roda [`scripts/migrate.mjs`](scripts/migrate.mjs), que aplica as migrações
+pendentes (todas idempotentes) antes de compilar. Para ativar:
+
+1. No Supabase: **Connect** (topo do painel) → aba **Session pooler** → copie a URI
+   e substitua `[YOUR-PASSWORD]` pela senha do banco.
+2. Na Vercel: projeto → **Settings → Environment Variables** → adicione
+   `SUPABASE_DB_URL` com essa URI (Production e Preview) → **Redeploy**.
+
+Sem a variável, o script apenas avisa e o build segue normalmente.
 3. Em **Project Settings → API**, copie a **Project URL** e a **anon public key**.
 
 > A service role key **não** é usada pelo app — guarde-a em segurança e não a coloque no frontend.
