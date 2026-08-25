@@ -34,8 +34,18 @@ export default function Jogadores() {
   }
   useEffect(load, [])
 
+  // Aviso de nome/apelido repetido no cadastro
+  const norm = (s: string) => s.trim().toLowerCase()
+  const duplicado = players.find(p =>
+    (name.trim() && norm(p.name) === norm(name))
+    || (nickname.trim() && p.nickname && norm(p.nickname) === norm(nickname)),
+  )
+
   async function handleCreate(e: FormEvent) {
     e.preventDefault()
+    if (duplicado && !confirm(
+      `⚠️ Já existe um atleta com esse nome/apelido: ${duplicado.name}${duplicado.nickname ? ` “${duplicado.nickname}”` : ''}.\n\nCadastrar mesmo assim?`,
+    )) return
     setBusy(true)
     try {
       const finalSkills = avulso ? defaultSkills(notaAvulso) : skills
@@ -88,6 +98,12 @@ export default function Jogadores() {
               <label className="label">Apelido (opcional)</label>
               <input className="input" value={nickname} onChange={e => setNickname(e.target.value)} />
             </div>
+            {duplicado && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 sm:col-span-2">
+                ⚠️ Já existe um atleta parecido: <b>{duplicado.name}</b>
+                {duplicado.nickname && <> “{duplicado.nickname}”</>} — confira se não é a mesma pessoa.
+              </p>
+            )}
             <div>
               <label className="label">Categoria</label>
               <select className="input" value={category} onChange={e => setCategory(e.target.value as Player['category'])}>

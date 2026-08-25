@@ -8,7 +8,7 @@ import {
   TEAM_COLORS, TEAM_NAMES,
   type Match, type Pelada, type PeladaPlayer, type Player,
 } from '../lib/types'
-import { Escalacao, TrocarSelect } from '../components/Escalacao'
+import { Escalacao, SwapModal, TrocarSelect } from '../components/Escalacao'
 
 export default function Times() {
   const { canEdit } = useAuth()
@@ -19,6 +19,7 @@ export default function Times() {
   const [warnings, setWarnings] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [swapModal, setSwapModal] = useState<{ pp: PeladaPlayer; other: PeladaPlayer } | null>(null)
 
   async function load() {
     const { data: pe } = await supabase.from('peladas')
@@ -73,38 +74,67 @@ export default function Times() {
     } finally { setBusy(false) }
   }
 
-  async function trocar(pp: PeladaPlayer, alvo: string) {
+  function trocar(pp: PeladaPlayer, alvo: string) {
     if (!pelada) return
     if (alvo === 'fora') {
-      const { error } = await supabase.from('pelada_players').update({ team: null, is_extra: true }).eq('id', pp.id)
-      if (error) alert('Erro na troca: ' + error.message)
-      await supabase.from('substitutions').insert({
+      // Tirar do time não apaga o slot: a vaga fica aberta na escalação
+      supabase.from('pelada_players').update({ team: null, is_extra: true }).eq('id', pp.id)
+        .then(({ error }) => {
+          if (error) alert('Erro ao tirar do time: ' + error.message)
+          load()
+        })
+      supabase.from('substitutions').insert({
         pelada_id: pelada.id, match_id: currentMatch?.id ?? null,
         team: pp.team, out_player: pp.player_id, in_player: null,
-      })
-    } else {
-      const other = pps.find(o => o.id === alvo)
-      if (!other) return
-      const t1 = pp.team, t2 = other.team
-      const results = await Promise.all([
-        supabase.from('pelada_players').update({ team: t2, is_extra: t2 == null }).eq('id', pp.id),
-        supabase.from('pelada_players').update({ team: t1, is_extra: t1 == null }).eq('id', other.id),
-      ])
-      const failed = results.find(r => r.error)
-      if (failed?.error) alert('Erro na troca: ' + failed.error.message)
-      await supabase.from('substitutions').insert({
-        pelada_id: pelada.id, match_id: currentMatch?.id ?? null,
-        team: t2, in_player: other.player_id, out_player: pp.player_id,
-      })
-      if (currentMatch) {
-        const playing = [currentMatch.team_a, currentMatch.team_b]
-        const upserts: { match_id: string; player_id: string; team: number }[] = []
-        if (t2 != null && playing.includes(t2)) upserts.push({ match_id: currentMatch.id, player_id: pp.player_id, team: t2 })
-        if (t1 != null && playing.includes(t1)) upserts.push({ match_id: currentMatch.id, player_id: other.player_id, team: t1 })
-        if (upserts.length) {
-          await supabase.from('match_players').upsert(upserts, { onConflict: 'match_id,player_id' })
-        }
+      }).then(() => {})
+      return
+    }
+    const other = pps.find(o => o.id === alvo)
+    if (!other) return
+    setSwapModal({ pp, other })
+  }
+
+  async function executarTroca(pp: PeladaPlayer, other: PeladaPlayer, temporary: boolean) {
+    if (!pelada) return
+    setSwapModal(null)
+    const t1 = pp.team, t2 = other.team
+    const results = await Promise.all([
+      supabase.from('pelada_players').update({ team: t2, is_extra: t2 == null }).eq('id', pp.id),
+      supabase.from('pelada_players').update({ team: t1, is_extra: t1 == null }).eq('id', other.id),
+    ])
+    const failed = results.find(r => r.error)
+    if (failed?.error) alert('Erro na troca: ' + failed.error.message)
+    const { error: subErr } = await supabase.from('substitutions').insert({
+      pelada_id: pelada.id, match_id: currentMatch?.id ?? null,
+      team: t2, in_player: other.player_id, out_player: pp.player_id,
+      temporary,
+    })
+    if (subErr && temporary) alert('Erro ao registrar substituição temporária (rodou a migração do banco?): ' + subErr.message)
+    if (currentMatch) {
+      const playing = [currentMatch.team_a, currentMatch.team_b]
+      const upserts: { match_id: string; player_id: string; team: number }[] = []
+      if (t2 != null && playing.includes(t2)) upserts.push({ match_id: currentMatch.id, player_id: pp.player_id, team: t2 })
+      if (t1 != null && playing.includes(t1)) upserts.push({ match_id: currentMatch.id, player_id: other.player_id, team: t1 })
+      if (upserts.length) {
+        await supabase.from('match_players').upsert(upserts, { onConflict: 'match_id,player_id' })
       }
+    }
+    load()
+  }
+
+  async function adicionar(pp: PeladaPlayer, team: number) {
+    if (!pelada) return
+    const { error } = await supabase.from('pelada_players').update({ team, is_extra: false }).eq('id', pp.id)
+    if (error) { alert('Erro ao colocar o atleta no time: ' + error.message); return }
+    await supabase.from('substitutions').insert({
+      pelada_id: pelada.id, match_id: currentMatch?.id ?? null,
+      team, in_player: pp.player_id, out_player: null,
+    })
+    if (currentMatch && (team === currentMatch.team_a || team === currentMatch.team_b)) {
+      await supabase.from('match_players').upsert(
+        { match_id: currentMatch.id, player_id: pp.player_id, team },
+        { onConflict: 'match_id,player_id' },
+      )
     }
     load()
   }
@@ -165,7 +195,7 @@ export default function Times() {
                     <span>{TEAM_NAMES[t]}</span>
                     <span className="text-xs font-normal">Forma média {media}</span>
                   </div>
-                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={canEdit} onTrocar={trocar} />
+                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={canEdit} onTrocar={trocar} onAdd={adicionar} />
                 </div>
               )
             })}
@@ -190,6 +220,16 @@ export default function Times() {
           <Link to={`/peladas/${pelada.id}`} className="text-emerald-700 hover:underline">painel da pelada</Link>{' '}
           e sorteie por lá ou aqui.
         </div>
+      )}
+
+      {swapModal && (
+        <SwapModal
+          nomeA={nome(swapModal.pp.player_id)}
+          nomeB={nome(swapModal.other.player_id)}
+          temPartida={!!currentMatch}
+          onConfirm={temporary => executarTroca(swapModal.pp, swapModal.other, temporary)}
+          onCancel={() => setSwapModal(null)}
+        />
       )}
     </div>
   )

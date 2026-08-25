@@ -169,6 +169,7 @@ create table if not exists substitutions (
   team int,
   out_player uuid references players(id),
   in_player uuid references players(id),
+  temporary boolean not null default false, -- volta aos times originais no fim da partida
   created_at timestamptz not null default now()
 );
 

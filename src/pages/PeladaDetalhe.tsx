@@ -6,10 +6,10 @@ import { applyFormaDelta, clampForma } from '../lib/overall'
 import { fetchFisico } from '../lib/fisico'
 import { sortearTimes } from '../lib/sorteio'
 import { gerarSumula } from '../lib/sumula'
-import { Escalacao, TrocarSelect } from '../components/Escalacao'
+import { Escalacao, SwapModal, TrocarSelect } from '../components/Escalacao'
 import {
-  TEAM_COLORS, TEAM_NAMES,
-  type Goal, type Match, type MatchPlayer, type Pelada, type PeladaPlayer, type Player,
+  CATEGORY_COLORS, CATEGORY_LABELS, TEAM_COLORS, TEAM_NAMES,
+  type Category, type Goal, type Match, type MatchPlayer, type Pelada, type PeladaPlayer, type Player,
 } from '../lib/types'
 
 const MATCH_SECONDS = 600 // 10 minutos
@@ -30,6 +30,7 @@ export default function PeladaDetalhe() {
   const [metaModal, setMetaModal] = useState<Match | null>(null)
   const [penaltiModal, setPenaltiModal] = useState<Match | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [swapModal, setSwapModal] = useState<{ pp: PeladaPlayer; other: PeladaPlayer } | null>(null)
   const [novoA, setNovoA] = useState(1)
   const [novoB, setNovoB] = useState(2)
   const [busy, setBusy] = useState(false)
@@ -142,35 +143,66 @@ export default function PeladaDetalhe() {
   }
 
   // ---------- Troca de jogador (substituição / Rachão) ----------
-  async function trocar(pp: PeladaPlayer, alvo: string) {
+  function trocar(pp: PeladaPlayer, alvo: string) {
     if (alvo === 'fora') {
-      await supabase.from('pelada_players').update({ team: null, is_extra: true }).eq('id', pp.id)
-      await supabase.from('substitutions').insert({
+      // Tirar do time não apaga o slot: a vaga fica aberta na escalação
+      supabase.from('pelada_players').update({ team: null, is_extra: true }).eq('id', pp.id)
+        .then(({ error }) => {
+          checkErr(error, 'tirar do time')
+          load()
+        })
+      supabase.from('substitutions').insert({
         pelada_id: id, match_id: currentMatch?.id ?? null,
         team: pp.team, out_player: pp.player_id, in_player: null,
-      })
-    } else {
-      const other = pps.find(o => o.id === alvo)
-      if (!other) return
-      const t1 = pp.team, t2 = other.team
-      await Promise.all([
-        supabase.from('pelada_players').update({ team: t2, is_extra: t2 == null }).eq('id', pp.id),
-        supabase.from('pelada_players').update({ team: t1, is_extra: t1 == null }).eq('id', other.id),
-      ])
-      await supabase.from('substitutions').insert({
-        pelada_id: id, match_id: currentMatch?.id ?? null,
-        team: t2, in_player: other.player_id, out_player: pp.player_id,
-      })
-      // Quem entra num time que está jogando agora passa a contar estatística da partida
-      if (currentMatch) {
-        const playing = [currentMatch.team_a, currentMatch.team_b]
-        const upserts: { match_id: string; player_id: string; team: number }[] = []
-        if (t2 != null && playing.includes(t2)) upserts.push({ match_id: currentMatch.id, player_id: pp.player_id, team: t2 })
-        if (t1 != null && playing.includes(t1)) upserts.push({ match_id: currentMatch.id, player_id: other.player_id, team: t1 })
-        if (upserts.length) {
-          await supabase.from('match_players').upsert(upserts, { onConflict: 'match_id,player_id' })
-        }
+      }).then(() => {})
+      return
+    }
+    const other = pps.find(o => o.id === alvo)
+    if (!other) return
+    setSwapModal({ pp, other }) // pergunta: permanente ou temporária?
+  }
+
+  async function executarTroca(pp: PeladaPlayer, other: PeladaPlayer, temporary: boolean) {
+    setSwapModal(null)
+    const t1 = pp.team, t2 = other.team
+    const results = await Promise.all([
+      supabase.from('pelada_players').update({ team: t2, is_extra: t2 == null }).eq('id', pp.id),
+      supabase.from('pelada_players').update({ team: t1, is_extra: t1 == null }).eq('id', other.id),
+    ])
+    const failed = results.find(r => r.error)
+    if (failed?.error) checkErr(failed.error, 'fazer a substituição')
+    const { error: subErr } = await supabase.from('substitutions').insert({
+      pelada_id: id, match_id: currentMatch?.id ?? null,
+      team: t2, in_player: other.player_id, out_player: pp.player_id,
+      temporary,
+    })
+    if (subErr && temporary) checkErr(subErr, 'registrar a substituição temporária (rodou a migração do banco?)')
+    // Quem entra num time que está jogando agora passa a contar estatística da partida
+    if (currentMatch) {
+      const playing = [currentMatch.team_a, currentMatch.team_b]
+      const upserts: { match_id: string; player_id: string; team: number }[] = []
+      if (t2 != null && playing.includes(t2)) upserts.push({ match_id: currentMatch.id, player_id: pp.player_id, team: t2 })
+      if (t1 != null && playing.includes(t1)) upserts.push({ match_id: currentMatch.id, player_id: other.player_id, team: t1 })
+      if (upserts.length) {
+        await supabase.from('match_players').upsert(upserts, { onConflict: 'match_id,player_id' })
       }
+    }
+    load()
+  }
+
+  // Preencher uma vaga aberta com alguém de fora
+  async function adicionar(pp: PeladaPlayer, team: number) {
+    const { error } = await supabase.from('pelada_players').update({ team, is_extra: false }).eq('id', pp.id)
+    if (!checkErr(error, 'colocar o atleta no time')) return
+    await supabase.from('substitutions').insert({
+      pelada_id: id, match_id: currentMatch?.id ?? null,
+      team, in_player: pp.player_id, out_player: null,
+    })
+    if (currentMatch && (team === currentMatch.team_a || team === currentMatch.team_b)) {
+      await supabase.from('match_players').upsert(
+        { match_id: currentMatch.id, player_id: pp.player_id, team },
+        { onConflict: 'match_id,player_id' },
+      )
     }
     load()
   }
@@ -352,8 +384,10 @@ export default function PeladaDetalhe() {
 
       const pausado = match.paused_total_seg
         + (match.paused_at ? Math.round((Date.now() - new Date(match.paused_at).getTime()) / 1000) : 0)
+      // No Rachão não há limite de tempo, então a duração não é capada
+      const cap = pelada?.rachao ? Number.POSITIVE_INFINITY : MATCH_SECONDS + 120
       const duracao = Math.max(0, Math.min(
-        MATCH_SECONDS + 120,
+        cap,
         Math.round((Date.now() - new Date(match.started_at).getTime()) / 1000) - pausado,
       ))
       const { error } = await supabase.from('matches').update({
@@ -366,6 +400,20 @@ export default function PeladaDetalhe() {
 
       // Forma: vitória +0.3, derrota -0.3, empate mantém (com teto/piso do Overall)
       if (winner != null) await aplicarForma(match.id, winner)
+
+      // Substituições temporárias desta partida: todo mundo volta ao time original
+      const { data: temps } = await supabase.from('substitutions')
+        .select('in_player, out_player').eq('match_id', match.id).eq('temporary', true)
+      for (const s of temps ?? []) {
+        if (!s.in_player || !s.out_player) continue
+        const { data: rows } = await supabase.from('pelada_players')
+          .select('*').eq('pelada_id', id).in('player_id', [s.in_player, s.out_player])
+        if (rows?.length === 2) {
+          const [r1, r2] = rows as PeladaPlayer[]
+          await supabase.from('pelada_players').update({ team: r2.team, is_extra: r2.team == null }).eq('id', r1.id)
+          await supabase.from('pelada_players').update({ team: r1.team, is_extra: r1.team == null }).eq('id', r2.id)
+        }
+      }
 
       setPenaltiModal(null)
       setMetaModal(null)
@@ -416,23 +464,27 @@ export default function PeladaDetalhe() {
     try {
       let sumula = gerarSumula(pelada!.date, players, matches, matchPlayers, goals)
 
-      // Regra automática: convidado com 4+ presenças nas últimas 10 peladas vira frequente
+      // Assiduidade automática (menos Mensalista, que é manual): pelas últimas 6 sessões,
+      // 0 presenças = Turista · 1 a 3 = Convidado · 4+ = Frequente
       const { data: ultimas } = await supabase.from('peladas')
-        .select('id').order('date', { ascending: false }).limit(10)
+        .select('id').order('date', { ascending: false }).limit(6)
       const peladaIds = (ultimas ?? []).map(p => p.id)
       const { data: presAll } = await supabase.from('pelada_players')
         .select('player_id, pelada_id').in('pelada_id', peladaIds)
       const counts = new Map<string, number>()
       for (const pr of presAll ?? []) counts.set(pr.player_id, (counts.get(pr.player_id) ?? 0) + 1)
-      const promovidos: string[] = []
+      const mudancas: string[] = []
       for (const p of players) {
-        if (p.category === 'convidado' && (counts.get(p.id) ?? 0) >= 4) {
-          await supabase.from('players').update({ category: 'frequente' }).eq('id', p.id)
-          promovidos.push(p.nickname || p.name)
+        if (!p.active || p.category === 'mensalista') continue
+        const c = counts.get(p.id) ?? 0
+        const nova: Category = c >= 4 ? 'frequente' : c >= 1 ? 'convidado' : 'turista'
+        if (nova !== p.category) {
+          const { error } = await supabase.from('players').update({ category: nova }).eq('id', p.id)
+          if (!error) mudancas.push(`${p.nickname || p.name} → ${CATEGORY_LABELS[nova]}`)
         }
       }
-      if (promovidos.length) {
-        sumula += `\n\n📋 Promoção automática: ${promovidos.join(', ')} agora é/são Frequente(s) (4+ presenças nas últimas 10).`
+      if (mudancas.length) {
+        sumula += `\n\n📋 Assiduidade atualizada (últimas 6 sessões): ${mudancas.join(' · ')}.`
       }
 
       await supabase.from('peladas').update({ status: 'encerrada', sumula }).eq('id', pelada!.id)
@@ -509,25 +561,22 @@ export default function PeladaDetalhe() {
           {showPresenca && (
             <>
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Mensalistas</span>
-                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">Presentes nas últimas 5</span>
-                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-600">Demais (ordem alfabética)</span>
+                {(['mensalista', 'frequente', 'convidado', 'turista'] as Category[]).map(c => (
+                  <span key={c} className={`rounded-full px-2 py-0.5 ${CATEGORY_COLORS[c]}`}>{CATEGORY_LABELS[c]}</span>
+                ))}
               </div>
               <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 md:grid-cols-3">
                 {listaPresenca.map(p => {
                   const marcado = pps.some(pp => pp.player_id === p.id)
                   const c5 = ultimas5.get(p.id) ?? 0
-                  const tierBg = p.category === 'mensalista'
-                    ? 'bg-amber-100'
-                    : c5 > 0 ? 'bg-sky-100' : 'bg-zinc-100'
                   return (
-                    <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${tierBg} ${marcado ? 'ring-2 ring-emerald-500' : ''}`}>
+                    <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${CATEGORY_COLORS[p.category]} ${marcado ? 'ring-2 ring-emerald-500' : ''}`}>
                       <input type="checkbox" checked={marcado} onChange={() => togglePresenca(p.id)} className="accent-emerald-600" />
                       <span className="flex-1">
                         {p.nickname || p.name}
                         {p.is_goleiro_avulso && ' 🧤'}
                       </span>
-                      {c5 > 0 && <span className="text-xs text-zinc-500">{c5}/5</span>}
+                      {c5 > 0 && <span className="text-xs opacity-70">{c5}/5</span>}
                     </label>
                   )
                 })}
@@ -563,7 +612,7 @@ export default function PeladaDetalhe() {
                     <span>{TEAM_NAMES[t]}</span>
                     <span className="text-xs font-normal">Forma média {media}</span>
                   </div>
-                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} />
+                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} onAdd={adicionar} />
                 </div>
               )
             })}
@@ -592,7 +641,7 @@ export default function PeladaDetalhe() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-bold">⏱️ Partida {currentMatch.ordem}</h2>
             <div className="flex items-center gap-2">
-              <Cronometro match={currentMatch} />
+              <Cronometro match={currentMatch} semLimite={pelada.rachao} />
               {canEdit && (currentMatch.paused_at
                 ? <button className="btn-primary" onClick={() => retomar(currentMatch)}>▶ Retomar</button>
                 : <button className="btn-secondary" onClick={() => pausar(currentMatch)}>⏸ Pausar</button>
@@ -617,7 +666,7 @@ export default function PeladaDetalhe() {
                   </button>
                 )}
                 <div className="mt-2 rounded-lg bg-zinc-50 text-left">
-                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} compact />
+                  <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} onAdd={adicionar} compact />
                 </div>
               </div>
             ))}
@@ -636,7 +685,7 @@ export default function PeladaDetalhe() {
           </ul>
           {canEdit && (
             <button className="btn-secondary w-full" onClick={() => encerrarPorTempo(currentMatch)} disabled={busy}>
-              Encerrar partida (tempo esgotado)
+              {pelada.rachao ? 'Encerrar partida' : 'Encerrar partida (tempo esgotado)'}
             </button>
           )}
         </div>
@@ -668,7 +717,7 @@ export default function PeladaDetalhe() {
             {[novoA, novoB].map(t => (
               <div key={t} className="overflow-hidden rounded-lg border border-zinc-200">
                 <p className={`px-3 py-1.5 text-sm font-bold ${TEAM_COLORS[t]}`}>{TEAM_NAMES[t]}</p>
-                <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} compact />
+                <Escalacao team={t} pps={pps} byId={byId} nome={nome} podeTrocar={podeTrocar} onTrocar={trocar} onAdd={adicionar} compact />
               </div>
             ))}
           </div>
@@ -794,6 +843,17 @@ export default function PeladaDetalhe() {
         </div>
       )}
 
+      {/* Modal de substituição: permanente ou temporária */}
+      {swapModal && (
+        <SwapModal
+          nomeA={nome(swapModal.pp.player_id)}
+          nomeB={nome(swapModal.other.player_id)}
+          temPartida={!!currentMatch}
+          onConfirm={temporary => executarTroca(swapModal.pp, swapModal.other, temporary)}
+          onCancel={() => setSwapModal(null)}
+        />
+      )}
+
       {/* Modal de pênaltis (1ª partida) */}
       {penaltiModal && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4">
@@ -818,7 +878,7 @@ export default function PeladaDetalhe() {
 
 // ---------- Componentes auxiliares ----------
 
-function Cronometro({ match }: { match: Match }) {
+function Cronometro({ match, semLimite }: { match: Match; semLimite?: boolean }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 1000)
@@ -827,20 +887,24 @@ function Cronometro({ match }: { match: Match }) {
   const pausadoMs = match.paused_total_seg * 1000
     + (match.paused_at ? now - new Date(match.paused_at).getTime() : 0)
   const elapsed = Math.floor((now - new Date(match.started_at).getTime() - pausadoMs) / 1000)
-  const remaining = MATCH_SECONDS - elapsed
-  const abs = Math.abs(remaining)
-  const mm = String(Math.floor(abs / 60)).padStart(2, '0')
-  const ss = String(abs % 60).padStart(2, '0')
-  if (match.paused_at) {
-    return (
-      <span className="rounded-lg bg-blue-100 px-3 py-1 font-mono text-xl font-bold text-blue-800">
-        ⏸ {remaining <= 0 ? `+${mm}:${ss}` : `${mm}:${ss}`}
-      </span>
-    )
+  const fmtSec = (s: number) => {
+    const abs = Math.abs(s)
+    return `${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`
   }
+  // Rachão: sem limite de tempo — cronômetro só conta pra cima
+  const texto = semLimite
+    ? fmtSec(elapsed)
+    : MATCH_SECONDS - elapsed <= 0 ? `+${fmtSec(MATCH_SECONDS - elapsed)}` : fmtSec(MATCH_SECONDS - elapsed)
+  const estilo = match.paused_at
+    ? 'bg-blue-100 text-blue-800'
+    : semLimite
+      ? 'bg-orange-100 text-orange-800'
+      : MATCH_SECONDS - elapsed <= 0
+        ? 'animate-pulse bg-red-600 text-white'
+        : MATCH_SECONDS - elapsed <= 60 ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100'
   return (
-    <span className={`rounded-lg px-3 py-1 font-mono text-xl font-bold ${remaining <= 0 ? 'animate-pulse bg-red-600 text-white' : remaining <= 60 ? 'bg-amber-100 text-amber-800' : 'bg-zinc-100'}`}>
-      {remaining <= 0 ? `+${mm}:${ss}` : `${mm}:${ss}`}
+    <span className={`rounded-lg px-3 py-1 font-mono text-xl font-bold ${estilo}`}>
+      {match.paused_at && '⏸ '}{semLimite && '🔥 '}{texto}
     </span>
   )
 }

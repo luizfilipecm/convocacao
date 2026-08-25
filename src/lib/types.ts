@@ -31,6 +31,14 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   mensalista: 'Mensalista', frequente: 'Frequente', turista: 'Turista', convidado: 'Convidado',
 }
 
+// Cores oficiais de cada tier de assiduidade — usar SEMPRE estas em todo o app
+export const CATEGORY_COLORS: Record<Category, string> = {
+  mensalista: 'bg-blue-100 text-blue-800',
+  frequente: 'bg-emerald-100 text-emerald-800',
+  convidado: 'bg-orange-100 text-orange-800',
+  turista: 'bg-yellow-100 text-yellow-800',
+}
+
 export const APTITUDE_LABELS: Record<number, string> = {
   1: 'Totalmente defensivo',
   2: 'Defensivo',

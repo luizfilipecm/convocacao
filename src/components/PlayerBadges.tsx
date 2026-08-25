@@ -1,15 +1,8 @@
-import { CATEGORY_LABELS, POSITION_LABELS, type Player } from '../lib/types'
-
-const catColor: Record<string, string> = {
-  mensalista: 'bg-emerald-100 text-emerald-800',
-  frequente: 'bg-blue-100 text-blue-800',
-  turista: 'bg-amber-100 text-amber-800',
-  convidado: 'bg-zinc-200 text-zinc-700',
-}
+import { CATEGORY_COLORS, CATEGORY_LABELS, POSITION_LABELS, type Player } from '../lib/types'
 
 export function CategoryBadge({ category }: { category: Player['category'] }) {
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${catColor[category]}`}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CATEGORY_COLORS[category]}`}>
       {CATEGORY_LABELS[category]}
     </span>
   )

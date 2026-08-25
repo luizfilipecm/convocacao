@@ -14,8 +14,9 @@ sorteio de times equilibrados por **Forma**, cronômetro e registro de partidas 
 2. Vá em **SQL Editor → New query**, cole o conteúdo inteiro de
    [`supabase/schema.sql`](supabase/schema.sql) e clique em **Run**.
    Isso cria todas as tabelas, permissões (RLS) e as funções de votação sem login.
-   *Já tinha rodado uma versão anterior do schema?* Rode só
-   [`supabase/migration-2026-08-17-pausa.sql`](supabase/migration-2026-08-17-pausa.sql).
+   *Já tinha rodado uma versão anterior do schema?* Rode só as migrações novas:
+   [`supabase/migration-2026-08-17-pausa.sql`](supabase/migration-2026-08-17-pausa.sql) e
+   [`supabase/migration-2026-08-25-subs-temporarias.sql`](supabase/migration-2026-08-25-subs-temporarias.sql).
 3. Em **Project Settings → API**, copie a **Project URL** e a **anon public key**.
 
 > A service role key **não** é usada pelo app — guarde-a em segurança e não a coloque no frontend.
@@ -61,7 +62,7 @@ Todo push na branch `main` gera deploy automático.
 | **Scout** | Avaliação de habilidades por votação, feita uma vez por jogador |
 | **Voto** | Link de votação de Scout, sem login (`/votar/:token`) |
 | **Anticovardia** | A partir da 4ª partida seguida em quadra, a meta de gols pra continuar sobe (3, 4, 5…) |
-| **Modo Rachão** | Fim de pelada: times livres, estatísticas continuam contando |
+| **Modo Rachão** | Fim de pelada: times livres, sem limite de tempo, estatísticas continuam contando |
 | **Súmula** | Resumo automático do dia em linguagem de pelada |
 
 ### Regras implementadas
@@ -79,8 +80,14 @@ Todo push na branch `main` gera deploy automático.
 - **Ajustes do organizador:** em partidas encerradas dá pra editar/apagar gols e
   assistências, adicionar gols e apagar a partida inteira — placar, resultado e Forma
   são recalculados (e revertidos) automaticamente.
-- **Categorias:** Mensalista (promoção manual), Frequente (automático: convidado com 4+
-  presenças nas últimas 10 peladas), Turista, Convidado.
+- **Categorias (cores padronizadas no app inteiro):** Mensalista (azul, promoção manual),
+  Frequente (verde), Convidado (laranja), Turista (amarelo). Exceto Mensalista, a categoria
+  é automática pelas últimas 6 sessões, recalculada ao encerrar cada sessão:
+  0 presenças = Turista · 1 a 3 = Convidado · 4+ = Frequente.
+- **Substituições:** trocar dois atletas abre a escolha entre permanente (trocam de time)
+  ou temporária (voltam aos times originais quando a partida acaba). Tirar alguém do time
+  deixa a vaga aberta na escalação para colocar outro atleta.
+- **Cadastro:** aviso de nome ou apelido repetido para evitar atleta duplicado.
 - **Scout de jogador novo:** avaliação simples no cadastro; na 3ª presença o sistema
   libera o Scout por votação com sugestão de notas baseada no desempenho.
 - **Avaliações de skill são registros datados** — editar nota nunca altera o histórico.
