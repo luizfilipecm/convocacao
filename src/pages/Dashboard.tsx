@@ -35,14 +35,14 @@ export default function Dashboard() {
 
       {peladaAberta ? (
         <Link to={`/peladas/${peladaAberta.id}`} className="card block border-l-4 border-emerald-600 hover:shadow-md">
-          <p className="text-sm font-semibold text-emerald-700">🔴 Pelada em andamento</p>
+          <p className="text-sm font-semibold text-emerald-700">🔴 Sessão de pelada aberta</p>
           <p className="text-lg font-bold">{fmt(peladaAberta.date)}</p>
-          <p className="text-sm text-zinc-500">Toque para abrir o painel do dia</p>
+          <p className="text-sm text-zinc-500">Toque para abrir o painel do dia (partidas, times e encerramento)</p>
         </Link>
       ) : canEdit ? (
         <div className="card">
-          <p className="mb-3 text-zinc-600">Nenhuma pelada em andamento.</p>
-          <button className="btn-primary" onClick={novaPelada}>+ Começar pelada de hoje</button>
+          <p className="mb-3 text-zinc-600">Nenhuma sessão de pelada aberta.</p>
+          <button className="btn-primary" onClick={novaPelada}>▶ Iniciar sessão de hoje</button>
         </div>
       ) : (
         <div className="card text-zinc-600">Nenhuma pelada em andamento.</div>

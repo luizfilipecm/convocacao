@@ -11,6 +11,7 @@ import Votar from './pages/Votar'
 import Peladas from './pages/Peladas'
 import PeladaDetalhe from './pages/PeladaDetalhe'
 import Rankings from './pages/Rankings'
+import Times from './pages/Times'
 
 function Protected({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth()
@@ -31,6 +32,7 @@ export default function App() {
       <Route path="/jogadores/:id" element={<Protected><JogadorDetalhe /></Protected>} />
       <Route path="/scouts" element={<Protected><Scouts /></Protected>} />
       <Route path="/scouts/:id" element={<Protected><ScoutDetalhe /></Protected>} />
+      <Route path="/times" element={<Protected><Times /></Protected>} />
       <Route path="/peladas" element={<Protected><Peladas /></Protected>} />
       <Route path="/peladas/:id" element={<Protected><PeladaDetalhe /></Protected>} />
       <Route path="/rankings" element={<Protected><Rankings /></Protected>} />

@@ -3,8 +3,10 @@ import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { applyFormaDelta, clampForma } from '../lib/overall'
+import { fetchFisico } from '../lib/fisico'
 import { sortearTimes } from '../lib/sorteio'
 import { gerarSumula } from '../lib/sumula'
+import { Escalacao, TrocarSelect } from '../components/Escalacao'
 import {
   TEAM_COLORS, TEAM_NAMES,
   type Goal, type Match, type MatchPlayer, type Pelada, type PeladaPlayer, type Player,
@@ -31,6 +33,13 @@ export default function PeladaDetalhe() {
   const [novoA, setNovoA] = useState(1)
   const [novoB, setNovoB] = useState(2)
   const [busy, setBusy] = useState(false)
+  const [previaSumula, setPreviaSumula] = useState<string | null>(null)
+
+  // Toda escrita importante avisa se falhar (ex.: falta de permissão, migração não rodada)
+  function checkErr(error: { message: string } | null, ctx: string): boolean {
+    if (error) alert(`Erro ao ${ctx}: ${error.message}`)
+    return !error
+  }
 
   async function load() {
     if (!id) return
@@ -115,7 +124,8 @@ export default function PeladaDetalhe() {
     if (sorteado && !confirm('Ressortear os times? A configuração atual será substituída.')) return
     setBusy(true)
     try {
-      const result = sortearTimes(presentes)
+      const fisico = await fetchFisico(presentes.map(p => p.id))
+      const result = sortearTimes(presentes, fisico)
       setWarnings(result.warnings)
       const updates = pps.map(pp => {
         let team: number | null = null
@@ -124,7 +134,9 @@ export default function PeladaDetalhe() {
         }
         return supabase.from('pelada_players').update({ team, is_extra: team == null }).eq('id', pp.id)
       })
-      await Promise.all(updates)
+      const results = await Promise.all(updates)
+      const failed = results.find(r => r.error)
+      if (failed) checkErr(failed.error, 'salvar o sorteio')
       load()
     } finally { setBusy(false) }
   }
@@ -171,10 +183,12 @@ export default function PeladaDetalhe() {
     return { sugA: last.fica, sugB: foraDoJogo }
   }
 
+  // Reatualiza a sugestão sempre que uma partida termina ou começa
+  const finishedCount = finished.length
   useEffect(() => {
     const { sugA, sugB } = proximaInfo()
     setNovoA(sugA); setNovoB(sugB)
-  }, [matches.length])
+  }, [matches.length, finishedCount])
 
   function streakDe(team: number): number {
     const last = finished[finished.length - 1]
@@ -206,24 +220,34 @@ export default function PeladaDetalhe() {
   }
 
   async function pausar(m: Match) {
-    await supabase.from('matches').update({ paused_at: new Date().toISOString() }).eq('id', m.id)
+    const { error } = await supabase.from('matches').update({ paused_at: new Date().toISOString() }).eq('id', m.id)
+    checkErr(error, 'pausar (rodou a migração do banco?)')
     load()
   }
 
   async function retomar(m: Match) {
     if (!m.paused_at) return
     const extra = Math.round((Date.now() - new Date(m.paused_at).getTime()) / 1000)
-    await supabase.from('matches')
+    const { error } = await supabase.from('matches')
       .update({ paused_at: null, paused_total_seg: m.paused_total_seg + extra })
       .eq('id', m.id)
+    checkErr(error, 'retomar')
+    load()
+  }
+
+  async function reabrirSessao() {
+    if (!confirm('Reabrir a sessão desta pelada? A Súmula será regenerada quando encerrar de novo.')) return
+    const { error } = await supabase.from('peladas').update({ status: 'aberta' }).eq('id', pelada!.id)
+    checkErr(error, 'reabrir a sessão')
     load()
   }
 
   async function registrarGol(match: Match, teamCredito: number, scorerId: string | null, assistId: string | null, ownGoal: boolean) {
-    await supabase.from('goals').insert({
+    const { error } = await supabase.from('goals').insert({
       match_id: match.id, pelada_id: id, team: teamCredito,
       scorer_id: scorerId, assist_id: assistId, own_goal: ownGoal,
     })
+    if (!checkErr(error, 'registrar o gol')) { setGoalModal(null); return }
     setGoalModal(null)
     if (match.status === 'encerrada') {
       // ajuste manual do organizador em partida já encerrada
@@ -243,7 +267,8 @@ export default function PeladaDetalhe() {
   }
 
   async function salvarEdicaoGol(goal: Goal, scorerId: string | null, assistId: string | null, ownGoal: boolean) {
-    await supabase.from('goals').update({ scorer_id: scorerId, assist_id: assistId, own_goal: ownGoal }).eq('id', goal.id)
+    const { error } = await supabase.from('goals').update({ scorer_id: scorerId, assist_id: assistId, own_goal: ownGoal }).eq('id', goal.id)
+    checkErr(error, 'editar o gol')
     setGoalModal(null)
     const match = matches.find(m => m.id === goal.match_id)
     if (match?.status === 'encerrada') await recomputarPartida(match.id)
@@ -331,12 +356,13 @@ export default function PeladaDetalhe() {
         MATCH_SECONDS + 120,
         Math.round((Date.now() - new Date(match.started_at).getTime()) / 1000) - pausado,
       ))
-      await supabase.from('matches').update({
+      const { error } = await supabase.from('matches').update({
         status: 'encerrada', winner, fica,
         penaltis: penaltiWinner != null, penalti_winner: penaltiWinner ?? null,
         paused_at: null, paused_total_seg: pausado,
         ended_at: new Date().toISOString(), duracao_seg: duracao,
       }).eq('id', match.id)
+      if (!checkErr(error, 'encerrar a partida')) return
 
       // Forma: vitória +0.3, derrota -0.3, empate mantém (com teto/piso do Overall)
       if (winner != null) await aplicarForma(match.id, winner)
@@ -360,7 +386,8 @@ export default function PeladaDetalhe() {
     const score_b = list.filter(g => g.team === match.team_b).length
     const winner = score_a > score_b ? match.team_a : score_b > score_a ? match.team_b : null
     await reverterForma(matchId)
-    await supabase.from('matches').update({ score_a, score_b, winner }).eq('id', matchId)
+    const { error } = await supabase.from('matches').update({ score_a, score_b, winner }).eq('id', matchId)
+    checkErr(error, 'recalcular a partida')
     if (winner != null) await aplicarForma(matchId, winner)
     load()
   }
@@ -370,7 +397,8 @@ export default function PeladaDetalhe() {
     setBusy(true)
     try {
       await reverterForma(m.id)
-      await supabase.from('matches').delete().eq('id', m.id)
+      const { error } = await supabase.from('matches').delete().eq('id', m.id)
+      checkErr(error, 'apagar a partida')
       load()
     } finally { setBusy(false) }
   }
@@ -437,14 +465,31 @@ export default function PeladaDetalhe() {
           </div>
         </div>
         {canEdit && aberta && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" onClick={() => setPreviaSumula(gerarSumula(pelada.date, players, matches, matchPlayers, goals))}>
+              📜 Resumo parcial
+            </button>
             <button className="btn-secondary" onClick={toggleRachao}>
               {pelada.rachao ? 'Desativar Rachão' : '🔥 Modo Rachão'}
             </button>
-            <button className="btn-danger" onClick={encerrarPelada} disabled={busy}>Encerrar pelada</button>
+            <button className="btn-danger" onClick={encerrarPelada} disabled={busy}>⏹ Encerrar sessão</button>
           </div>
         )}
+        {isOrganizador && !aberta && (
+          <button className="btn-secondary" onClick={reabrirSessao} disabled={busy}>🔓 Reabrir sessão</button>
+        )}
       </div>
+
+      {/* Resumo parcial (sem encerrar a sessão) */}
+      {previaSumula && aberta && (
+        <div className="card border-l-4 border-blue-400">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="font-bold">📜 Resumo parcial (até agora)</h2>
+            <button className="btn-secondary" onClick={() => setPreviaSumula(null)}>Fechar</button>
+          </div>
+          <pre className="whitespace-pre-wrap font-sans text-sm">{previaSumula}</pre>
+        </div>
+      )}
 
       {/* Súmula */}
       {pelada.sumula && (
@@ -463,22 +508,26 @@ export default function PeladaDetalhe() {
           </button>
           {showPresenca && (
             <>
-              <p className="mt-2 text-xs text-zinc-400">
-                Ordem: mensalistas → mais presentes nas últimas 5 peladas → alfabética
-              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">Mensalistas</span>
+                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">Presentes nas últimas 5</span>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-600">Demais (ordem alfabética)</span>
+              </div>
               <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 md:grid-cols-3">
                 {listaPresenca.map(p => {
                   const marcado = pps.some(pp => pp.player_id === p.id)
                   const c5 = ultimas5.get(p.id) ?? 0
+                  const tierBg = p.category === 'mensalista'
+                    ? 'bg-amber-100'
+                    : c5 > 0 ? 'bg-sky-100' : 'bg-zinc-100'
                   return (
-                    <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${marcado ? 'bg-emerald-50' : ''}`}>
+                    <label key={p.id} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm ${tierBg} ${marcado ? 'ring-2 ring-emerald-500' : ''}`}>
                       <input type="checkbox" checked={marcado} onChange={() => togglePresenca(p.id)} className="accent-emerald-600" />
                       <span className="flex-1">
-                        {p.category === 'mensalista' && '⭐ '}
                         {p.nickname || p.name}
                         {p.is_goleiro_avulso && ' 🧤'}
                       </span>
-                      {c5 > 0 && <span className="text-xs text-zinc-400">{c5}/5</span>}
+                      {c5 > 0 && <span className="text-xs text-zinc-500">{c5}/5</span>}
                     </label>
                   )
                 })}
@@ -630,22 +679,22 @@ export default function PeladaDetalhe() {
       {finished.length > 0 && (
         <div className="card">
           <h2 className="mb-2 font-bold">Partidas do dia</h2>
-          {isOrganizador && (
-            <p className="mb-2 text-xs text-zinc-400">
-              Toque numa partida para ver escalações{isOrganizador && ' e fazer ajustes manuais (editar/apagar gols, apagar partida)'}.
-            </p>
-          )}
           <ul className="space-y-2 text-sm">
             {[...finished].reverse().map(m => (
               <li key={m.id} className="rounded-lg bg-zinc-50">
                 <button className="w-full px-3 py-2 text-left" onClick={() => setExpanded(expanded === m.id ? null : m.id)}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span>
                       <b>{m.ordem}ª</b> — {TEAM_NAMES[m.team_a]} <b>{m.score_a} × {m.score_b}</b> {TEAM_NAMES[m.team_b]}
                       {m.penaltis && ` (pênaltis: ${TEAM_NAMES[m.penalti_winner!]})`}
                     </span>
-                    <span className="text-xs text-zinc-500">
-                      {m.winner ? `venceu ${TEAM_NAMES[m.winner]}` : 'empate'} · ficou {m.fica ? TEAM_NAMES[m.fica] : '—'}
+                    <span className="flex shrink-0 items-center gap-2 text-xs text-zinc-500">
+                      <span className="hidden sm:inline">
+                        {m.winner ? `venceu ${TEAM_NAMES[m.winner]}` : 'empate'} · ficou {m.fica ? TEAM_NAMES[m.fica] : '—'}
+                      </span>
+                      <span className="rounded-full bg-white px-2 py-0.5 font-medium text-emerald-700 shadow-sm">
+                        {isOrganizador ? '✏️ ajustes' : 'detalhes'} {expanded === m.id ? '▲' : '▼'}
+                      </span>
                     </span>
                   </div>
                 </button>
@@ -768,66 +817,6 @@ export default function PeladaDetalhe() {
 }
 
 // ---------- Componentes auxiliares ----------
-
-/** Dropdown no jogador: trocar por outro atleta (de outro time, extra ou fora) */
-function TrocarSelect({
-  pp, pps, nome, onTrocar,
-}: {
-  pp: PeladaPlayer
-  pps: PeladaPlayer[]
-  nome: (id: string | null) => string
-  onTrocar: (pp: PeladaPlayer, alvo: string) => void
-}) {
-  const outros = pps.filter(o => o.id !== pp.id && o.team !== pp.team)
-  return (
-    <select
-      className="max-w-28 rounded border border-zinc-200 bg-white px-1 py-0.5 text-xs text-zinc-500"
-      value=""
-      onChange={e => { if (e.target.value) onTrocar(pp, e.target.value) }}
-    >
-      <option value="">⇄ trocar</option>
-      {pp.team != null && <option value="fora">— Tirar do time (fora)</option>}
-      {outros.map(o => (
-        <option key={o.id} value={o.id}>
-          {nome(o.player_id)} ({o.team ? TEAM_NAMES[o.team] : 'Fora'})
-        </option>
-      ))}
-    </select>
-  )
-}
-
-/** Lista de jogadores de um time, com dropdown de troca por atleta */
-function Escalacao({
-  team, pps, byId, nome, podeTrocar, onTrocar, compact,
-}: {
-  team: number
-  pps: PeladaPlayer[]
-  byId: Map<string, Player>
-  nome: (id: string | null) => string
-  podeTrocar: boolean
-  onTrocar: (pp: PeladaPlayer, alvo: string) => void
-  compact?: boolean
-}) {
-  const list = pps.filter(pp => pp.team === team)
-  return (
-    <ul className={`divide-y divide-zinc-100 ${compact ? 'text-xs' : 'text-sm'}`}>
-      {list.map(pp => {
-        const p = byId.get(pp.player_id)
-        const gk = p && (p.position1 === 'goleiro' || p.is_goleiro_avulso)
-        return (
-          <li key={pp.id} className={`flex items-center justify-between gap-1 ${compact ? 'px-2 py-1' : 'px-3 py-1.5'}`}>
-            <span className="truncate">
-              {gk && '🧤 '}{nome(pp.player_id)}{' '}
-              {!compact && <span className="text-xs text-zinc-400">{p?.forma}</span>}
-            </span>
-            {podeTrocar && <TrocarSelect pp={pp} pps={pps} nome={nome} onTrocar={onTrocar} />}
-          </li>
-        )
-      })}
-      {!list.length && <li className={compact ? 'px-2 py-1 text-zinc-400' : 'px-3 py-1.5 text-zinc-400'}>—</li>}
-    </ul>
-  )
-}
 
 function Cronometro({ match }: { match: Match }) {
   const [now, setNow] = useState(Date.now())

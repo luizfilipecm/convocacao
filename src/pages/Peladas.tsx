@@ -32,7 +32,7 @@ export default function Peladas() {
             <label className="label">Data</label>
             <input type="date" className="input" value={date} onChange={e => setDate(e.target.value)} />
           </div>
-          <button className="btn-primary" onClick={criar}>+ Nova pelada</button>
+          <button className="btn-primary" onClick={criar}>▶ Iniciar sessão</button>
         </div>
       )}
       <div className="space-y-2">

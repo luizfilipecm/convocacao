@@ -10,6 +10,11 @@ const LINE_POSITIONS: Position[] = ['defensor', 'meia', 'atacante']
 const LINE_PER_TEAM = 6 // 6 na linha
 const MAX_PER_TEAM = 7  // 1 goleiro + 6 linha (21 vagas no total)
 
+// Pesos da função de custo da otimização
+const W_FORMA = 1.0        // equilíbrio da Forma média
+const W_FISICO = 0.9       // equilíbrio do físico médio (velocidade + resistência)
+const W_FISICO_EXTREMOS = 0.25 // distribuição dos melhores/piores físicos entre os times
+
 const formaOf = (p: Player) => p.forma ?? p.overall ?? 5
 
 function shuffle<T>(arr: T[]): T[] {
@@ -27,17 +32,16 @@ function playsPosition(p: Player, pos: Position): boolean {
   return p.position1 === pos || p.position2 === pos
 }
 
-function teamAvg(team: Player[]): number {
+function avgBy(team: Player[], value: (p: Player) => number): number {
   const line = team.filter(p => !isGoleiro(p))
   const list = line.length ? line : team
   if (!list.length) return 0
-  return list.reduce((s, p) => s + formaOf(p), 0) / list.length
+  return list.reduce((s, p) => s + value(p), 0) / list.length
 }
 
-function variance(teams: Record<number, Player[]>): number {
-  const avgs = [1, 2, 3].map(t => teamAvg(teams[t]))
-  const mean = avgs.reduce((a, b) => a + b, 0) / 3
-  return avgs.reduce((s, a) => s + (a - mean) ** 2, 0) / 3
+function varianceOf(nums: number[]): number {
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length
+  return nums.reduce((s, a) => s + (a - mean) ** 2, 0) / nums.length
 }
 
 // Cada time precisa de pelo menos 1 defensor, 1 meia e 1 atacante
@@ -55,10 +59,16 @@ function coversPositions(team: Player[]): boolean {
   return true
 }
 
-export function sortearTimes(presentes: Player[]): SorteioResult {
+/**
+ * Sorteia 3 times equilibrados.
+ * @param fisico nota física por jogador ((velocidade + resistência) / 2), usada
+ *   para não concentrar nem os melhores nem os piores fisicamente num time só.
+ */
+export function sortearTimes(presentes: Player[], fisico?: Map<string, number>): SorteioResult {
   const warnings: string[] = []
   const teams: Record<number, Player[]> = { 1: [], 2: [], 3: [] }
   const extras: Player[] = []
+  const fisicoOf = (p: Player) => fisico?.get(p.id) ?? 5
 
   // --- Goleiros: um fixo por time ---
   const goleiros = shuffle(presentes.filter(isGoleiro)).sort((a, b) => formaOf(b) - formaOf(a))
@@ -74,6 +84,23 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
     warnings.push(`Só ${goleiros.length} goleiro(s) presente(s) — time(s) sem goleiro fixo.`)
   }
 
+  // Terços físicos (entre os jogadores de linha presentes): melhores e piores
+  const porFisico = [...linha].sort((a, b) => fisicoOf(b) - fisicoOf(a))
+  const terco = Math.max(1, Math.floor(porFisico.length / 3))
+  const topFisico = new Set(porFisico.slice(0, terco).map(p => p.id))
+  const bottomFisico = new Set(porFisico.slice(-terco).map(p => p.id))
+
+  function cost(): number {
+    const ts = [teams[1], teams[2], teams[3]]
+    const varForma = varianceOf(ts.map(t => avgBy(t, formaOf)))
+    const varFisico = varianceOf(ts.map(t => avgBy(t, fisicoOf)))
+    const tops = ts.map(t => t.filter(p => topFisico.has(p.id)).length)
+    const bottoms = ts.map(t => t.filter(p => bottomFisico.has(p.id)).length)
+    return W_FORMA * varForma
+      + W_FISICO * varFisico
+      + W_FISICO_EXTREMOS * (varianceOf(tops) + varianceOf(bottoms))
+  }
+
   // --- Vagas de linha: distribuir o mais parelho possível (máx. 6 por time) ---
   const totalLinha = Math.min(linha.length, LINE_PER_TEAM * 3)
   const sizes = [0, 0, 0]
@@ -82,10 +109,11 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
   const pool = [...linha].sort((a, b) => formaOf(b) - formaOf(a))
   const lineCount = (t: number) => teams[t].filter(p => !isGoleiro(p)).length
   const hasSpace = (t: number) => lineCount(t) < sizes[t - 1]
+  const teamAvgForma = (t: number) => avgBy(teams[t], formaOf)
 
   // Prioridade 1: cobrir defensor/meia/atacante em cada time
   for (const pos of LINE_POSITIONS) {
-    const order = [1, 2, 3].sort((a, b) => teamAvg(teams[a]) - teamAvg(teams[b]))
+    const order = [1, 2, 3].sort((a, b) => teamAvgForma(a) - teamAvgForma(b))
     for (const t of order) {
       if (!hasSpace(t)) continue
       if (teams[t].some(p => !isGoleiro(p) && playsPosition(p, pos))) continue
@@ -106,12 +134,12 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
   for (const p of fillOrder) {
     const open = [1, 2, 3].filter(hasSpace)
     if (!open.length) { extras.push(p); continue }
-    const t = open.sort((a, b) => teamAvg(teams[a]) - teamAvg(teams[b]))[0]
+    const t = open.sort((a, b) => teamAvgForma(a) - teamAvgForma(b))[0]
     teams[t].push(p)
   }
 
-  // --- Otimização local: trocas que reduzem a diferença de Forma média ---
-  for (let iter = 0; iter < 400; iter++) {
+  // --- Otimização local: trocas que reduzem o custo combinado (Forma + físico) ---
+  for (let iter = 0; iter < 800; iter++) {
     const t1 = 1 + Math.floor(Math.random() * 3)
     let t2 = 1 + Math.floor(Math.random() * 3)
     if (t1 === t2) t2 = (t2 % 3) + 1
@@ -120,11 +148,11 @@ export function sortearTimes(presentes: Player[]): SorteioResult {
     if (!l1.length || !l2.length) continue
     const p1 = l1[Math.floor(Math.random() * l1.length)]
     const p2 = l2[Math.floor(Math.random() * l2.length)]
-    const before = variance(teams)
+    const before = cost()
     teams[t1] = teams[t1].map(p => (p.id === p1.id ? p2 : p))
     teams[t2] = teams[t2].map(p => (p.id === p2.id ? p1 : p))
     const ok = coversPositions(teams[t1]) && coversPositions(teams[t2])
-    if (!ok || variance(teams) >= before) {
+    if (!ok || cost() >= before) {
       // desfaz
       teams[t1] = teams[t1].map(p => (p.id === p2.id ? p1 : p))
       teams[t2] = teams[t2].map(p => (p.id === p1.id ? p2 : p))
